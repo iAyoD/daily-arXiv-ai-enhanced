@@ -12,7 +12,7 @@ const DATA_CONFIG = {
      * GitHub repository owner (username)
      * This will be replaced during GitHub Actions workflow execution
      */
-    repoOwner: 'dw-dengwei',
+    repoOwner: 'iAyoD',
 
     /**
      * GitHub repository name
@@ -30,7 +30,7 @@ const DATA_CONFIG = {
      * Get the base URL for raw GitHub content from data branch
      * @returns {string} Base URL for raw GitHub content
      */
-    getDataBaseUrl: function() {
+    getDataBaseUrl: function () {
         return `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/${this.dataBranch}`;
     },
 
@@ -39,7 +39,7 @@ const DATA_CONFIG = {
      * @param {string} filePath - Relative path to the data file (e.g., 'data/2025-01-01.jsonl')
      * @returns {string} Full URL to the data file
      */
-    getDataUrl: function(filePath) {
+    getDataUrl: function (filePath) {
         return `${this.getDataBaseUrl()}/${filePath}`;
     }
 };
