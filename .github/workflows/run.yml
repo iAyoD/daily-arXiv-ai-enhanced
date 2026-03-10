@@ -5,7 +5,7 @@ name: arXiv-daily-ai-enhanced
 
 on:
   schedule:
-    - cron: "30 1 * * *"
+    - cron: "30 2 * * *"
   workflow_dispatch:
 
 
@@ -16,6 +16,25 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    
+    # 检出 data 分支到临时目录以获取历史数据
+    # Checkout data branch to a temporary directory to get historical data
+    - uses: actions/checkout@v4
+      with:
+        ref: data
+        path: temp_data_branch
+      continue-on-error: true # 如果分支不存在则继续 / Continue if branch doesn't exist
+
+    - name: Prepare Historical Data
+      run: |
+        mkdir -p data
+        if [ -d "temp_data_branch/data" ]; then
+          echo "Copying historical data files from data branch..."
+          cp temp_data_branch/data/*.jsonl data/ 2>/dev/null || true
+        else
+          echo "Data branch or directory not found, starting fresh."
+        fi
+        
     - name: Install dependencies
       run: |
         curl -LsSf https://astral.sh/uv/install.sh | sh
