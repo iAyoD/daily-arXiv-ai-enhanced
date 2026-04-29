@@ -3,17 +3,14 @@ import json
 import sys
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import List, Dict
-from queue import Queue
-from threading import Lock
-# INSERT_YOUR_CODE
 import requests
 
-import dotenv
 import argparse
 from tqdm import tqdm
 
-import langchain_core.exceptions
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -22,10 +19,21 @@ from langchain.prompts import (
 )
 from structure import Structure
 
-if os.path.exists('.env'):
-    dotenv.load_dotenv()
-template = open("template.txt", "r").read()
-system = open("system.txt", "r").read()
+BASE_DIR = Path(__file__).resolve().parent
+REPO_DIR = BASE_DIR.parent
+
+load_dotenv(REPO_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=False)
+
+template = (BASE_DIR / "template.txt").read_text()
+system = (BASE_DIR / "system.txt").read_text()
+
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Required environment variable {name} is not set")
+    return value
 
 def parse_args():
     """解析命令行参数"""
@@ -40,23 +48,16 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
         调用 spam.dw-dengwei.workers.dev 接口检测内容是否包含敏感词。
         返回 True 表示触发敏感词，False 表示未触发。
         """
-        try:
-            resp = requests.post(
-                "https://spam.dw-dengwei.workers.dev",
-                json={"text": content},
-                timeout=5
-            )
-            if resp.status_code == 200:
-                result = resp.json()
-                # 约定接口返回 {"sensitive": true/false, ...}
-                return result.get("sensitive", True)
-            else:
-                # 如果接口异常，默认不触发敏感词
-                print(f"Sensitive check failed with status {resp.status_code}", file=sys.stderr)
-                return True
-        except Exception as e:
-            print(f"Sensitive check error: {e}", file=sys.stderr)
-            return True
+        resp = requests.post(
+            "https://spam.dw-dengwei.workers.dev",
+            json={"text": content},
+            timeout=5
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if "sensitive" not in result:
+            raise RuntimeError("Sensitive check response missing 'sensitive' field")
+        return bool(result["sensitive"])
 
     def check_github_code(content: str) -> Dict:
         """提取并验证 GitHub 链接"""
@@ -80,16 +81,14 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
             
-            try:
-                api_url = f"https://api.github.com/repos/{owner}/{repo}"
-                resp = requests.get(api_url, headers=headers, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    code_info["code_stars"] = data.get("stargazers_count", 0)
-                    code_info["code_last_update"] = data.get("pushed_at", "")[:10]
-            except Exception:
-                # API 调用失败不影响主流程
-                pass
+            api_url = f"https://api.github.com/repos/{owner}/{repo}"
+            resp = requests.get(api_url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                code_info["code_stars"] = data.get("stargazers_count", 0)
+                code_info["code_last_update"] = data.get("pushed_at", "")[:10]
+            elif resp.status_code not in {403, 404}:
+                resp.raise_for_status()
             return code_info
 
         # 2. 如果没有 github.com，尝试匹配 github.io
@@ -114,50 +113,11 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
     if code_info:
         item.update(code_info)
 
-    """处理单个数据项"""
-    # Default structure with meaningful fallback values
-    default_ai_fields = {
-        "tldr": "Summary generation failed",
-        "motivation": "Motivation analysis unavailable",
-        "method": "Method extraction failed",
-        "result": "Result analysis unavailable",
-        "conclusion": "Conclusion extraction failed"
-    }
-    
-    try:
-        response: Structure = chain.invoke({
-            "language": language,
-            "content": item['summary']
-        })
-        item['AI'] = response.model_dump()
-    except langchain_core.exceptions.OutputParserException as e:
-        # 尝试从错误信息中提取 JSON 字符串并修复
-        error_msg = str(e)
-        partial_data = {}
-        
-        if "Function Structure arguments:" in error_msg:
-            try:
-                # 提取 JSON 字符串
-                json_str = error_msg.split("Function Structure arguments:", 1)[1].strip().split('are not valid JSON')[0].strip()
-                # 预处理 LaTeX 数学符号 - 使用四个反斜杠来确保正确转义
-                json_str = json_str.replace('\\', '\\\\')
-                # 尝试解析修复后的 JSON
-                partial_data = json.loads(json_str)
-            except Exception as json_e:
-                print(f"Failed to parse JSON for {item.get('id', 'unknown')}: {json_e}", file=sys.stderr)
-        
-        # Merge partial data with defaults to ensure all fields exist
-        item['AI'] = {**default_ai_fields, **partial_data}
-        print(f"Using partial AI data for {item.get('id', 'unknown')}: {list(partial_data.keys())}", file=sys.stderr)
-    except Exception as e:
-        # Catch any other exceptions and provide default values
-        print(f"Unexpected error for {item.get('id', 'unknown')}: {e}", file=sys.stderr)
-        item['AI'] = default_ai_fields
-    
-    # Final validation to ensure all required fields exist
-    for field in default_ai_fields.keys():
-        if field not in item['AI']:
-            item['AI'][field] = default_ai_fields[field]
+    response: Structure = chain.invoke({
+        "language": language,
+        "content": item['summary']
+    })
+    item['AI'] = response.model_dump()
 
     # 检查 AI 生成的所有字段
     for v in item.get("AI", {}).values():
@@ -167,7 +127,12 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
 
 def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
     """并行处理所有数据项"""
-    llm = ChatOpenAI(model=model_name).with_structured_output(Structure, method="function_calling")
+    llm = ChatOpenAI(
+        model=model_name,
+        api_key=require_env("OPENAI_API_KEY"),
+        base_url=os.environ.get("OPENAI_BASE_URL") or None,
+        temperature=0,
+    ).with_structured_output(Structure, method="json_mode")
     print('Connect to:', model_name, file=sys.stderr)
     
     prompt_template = ChatPromptTemplate.from_messages([
@@ -197,23 +162,15 @@ def process_all_items(data: List[Dict], model_name: str, language: str, max_work
                 result = future.result()
                 processed_data[idx] = result
             except Exception as e:
-                print(f"Item at index {idx} generated an exception: {e}", file=sys.stderr)
-                # Add default AI fields to ensure consistency
-                processed_data[idx] = data[idx]
-                processed_data[idx]['AI'] = {
-                    "tldr": "Processing failed",
-                    "motivation": "Processing failed",
-                    "method": "Processing failed",
-                    "result": "Processing failed",
-                    "conclusion": "Processing failed"
-                }
+                item_id = data[idx].get("id", "unknown")
+                raise RuntimeError(f"AI enhancement failed for item {item_id} at index {idx}") from e
     
     return processed_data
 
 def main():
     args = parse_args()
-    model_name = os.environ.get("MODEL_NAME", 'deepseek-chat')
-    language = os.environ.get("LANGUAGE", 'Chinese')
+    model_name = require_env("MODEL_NAME")
+    language = require_env("LANGUAGE")
 
     # 检查并删除目标文件
     target_file = args.data.replace('.jsonl', f'_AI_enhanced_{language}.jsonl')

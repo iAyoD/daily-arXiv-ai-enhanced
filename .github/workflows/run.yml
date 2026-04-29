@@ -57,9 +57,9 @@ jobs:
         fi
         
         cd daily_arxiv
-        export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-        export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
-        export TOKEN_GITHUB=${{ secrets.TOKEN_GITHUB }}
+        export OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}"
+        export OPENAI_BASE_URL="${{ secrets.OPENAI_BASE_URL }}"
+        export TOKEN_GITHUB="${{ secrets.TOKEN_GITHUB }}"
         export LANGUAGE="${{ vars.LANGUAGE }}"
         export CATEGORIES="${{ vars.CATEGORIES }}"
         export MODEL_NAME="${{ vars.MODEL_NAME }}"
@@ -124,8 +124,9 @@ jobs:
         echo "开始AI增强处理... / Starting AI enhancement processing..."
         
         cd ai
-        export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-        export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
+        export OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}"
+        export OPENAI_BASE_URL="${{ secrets.OPENAI_BASE_URL }}"
+        export TOKEN_GITHUB="${{ secrets.TOKEN_GITHUB }}"
         export LANGUAGE="${{ vars.LANGUAGE }}"
         export MODEL_NAME="${{ vars.MODEL_NAME }}"
         
