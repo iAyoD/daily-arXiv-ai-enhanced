@@ -3,6 +3,7 @@ import json
 import sys
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from json import JSONDecodeError
 from pathlib import Path
 from typing import List, Dict
 import requests
@@ -11,6 +12,7 @@ import argparse
 from tqdm import tqdm
 
 from dotenv import load_dotenv
+from pydantic import ValidationError
 from langchain_openai import ChatOpenAI
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -28,6 +30,14 @@ load_dotenv(BASE_DIR / ".env", override=False)
 template = (BASE_DIR / "template.txt").read_text()
 system = (BASE_DIR / "system.txt").read_text()
 
+REQUIRED_AI_FIELDS = ("tldr", "motivation", "method", "result", "conclusion")
+JSON_SCHEMA_INSTRUCTION = (
+    "Return only one valid JSON object with exactly these string fields: "
+    '"tldr", "motivation", "method", "result", and "conclusion". '
+    "Every field is required and must be non-empty. "
+    "Do not wrap the JSON in Markdown or add any text outside the JSON object."
+)
+
 
 def require_env(name: str) -> str:
     value = os.environ.get(name)
@@ -40,9 +50,70 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, required=True, help="jsonline data file")
     parser.add_argument("--max_workers", type=int, default=1, help="Maximum number of parallel workers")
+    parser.add_argument("--max_ai_attempts", type=int, default=3, help="Maximum AI generation attempts per item")
     return parser.parse_args()
 
-def process_single_item(chain, item: Dict, language: str) -> Dict:
+
+def parse_ai_response(content: str, item_id: str) -> Structure:
+    if not isinstance(content, str):
+        raise ValueError(f"AI response for {item_id} is not text")
+
+    try:
+        ai_data = json.loads(content)
+    except JSONDecodeError as e:
+        raise ValueError(f"AI response for {item_id} is not valid JSON") from e
+
+    try:
+        response = Structure.model_validate(ai_data)
+    except ValidationError as e:
+        raise ValueError(f"AI response for {item_id} does not match the required schema: {e}") from e
+
+    missing_or_empty = [
+        field
+        for field in REQUIRED_AI_FIELDS
+        if not getattr(response, field).strip()
+    ]
+    if missing_or_empty:
+        fields = ", ".join(missing_or_empty)
+        raise ValueError(f"AI response for {item_id} has empty fields: {fields}")
+
+    return response
+
+
+def generate_ai_fields(chain, repair_chain, item: Dict, language: str, max_ai_attempts: int) -> Dict:
+    item_id = item.get("id", "unknown")
+    last_error = None
+    last_response = None
+
+    for attempt in range(1, max_ai_attempts + 1):
+        if attempt == 1:
+            raw_response = chain.invoke({
+                "language": language,
+                "content": item["summary"],
+            })
+        else:
+            print(
+                f"Retrying AI JSON generation for {item_id} "
+                f"(attempt {attempt}/{max_ai_attempts}): {last_error}",
+                file=sys.stderr,
+            )
+            raw_response = repair_chain.invoke({
+                "language": language,
+                "content": item["summary"],
+                "previous_response": last_response or "",
+                "validation_error": str(last_error),
+            })
+
+        last_response = raw_response.content
+        try:
+            return parse_ai_response(last_response, item_id).model_dump()
+        except ValueError as e:
+            last_error = e
+
+    raise RuntimeError(f"AI generation failed schema validation for {item_id}") from last_error
+
+
+def process_single_item(chain, repair_chain, item: Dict, language: str, max_ai_attempts: int) -> Dict:
     def is_sensitive(content: str) -> bool:
         """
         调用 spam.dw-dengwei.workers.dev 接口检测内容是否包含敏感词。
@@ -113,11 +184,7 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
     if code_info:
         item.update(code_info)
 
-    response: Structure = chain.invoke({
-        "language": language,
-        "content": item['summary']
-    })
-    item['AI'] = response.model_dump()
+    item['AI'] = generate_ai_fields(chain, repair_chain, item, language, max_ai_attempts)
 
     # 检查 AI 生成的所有字段
     for v in item.get("AI", {}).values():
@@ -125,29 +192,43 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
             return None
     return item
 
-def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
+def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int, max_ai_attempts: int) -> List[Dict]:
     """并行处理所有数据项"""
     llm = ChatOpenAI(
         model=model_name,
         api_key=require_env("OPENAI_API_KEY"),
         base_url=os.environ.get("OPENAI_BASE_URL") or None,
         temperature=0,
-    ).with_structured_output(Structure, method="json_mode")
+    ).bind(response_format={"type": "json_object"})
     print('Connect to:', model_name, file=sys.stderr)
     
     prompt_template = ChatPromptTemplate.from_messages([
         SystemMessagePromptTemplate.from_template(system),
         HumanMessagePromptTemplate.from_template(template=template)
     ])
+    repair_prompt_template = ChatPromptTemplate.from_messages([
+        SystemMessagePromptTemplate.from_template(system),
+        HumanMessagePromptTemplate.from_template(
+            template=(
+                "The previous AI response for the paper abstract failed schema validation.\n\n"
+                f"{JSON_SCHEMA_INSTRUCTION}\n\n"
+                "Validation error:\n{validation_error}\n\n"
+                "Previous response:\n{previous_response}\n\n"
+                "Paper abstract:\n{content}\n\n"
+                "Regenerate the complete JSON in {language}."
+            )
+        )
+    ])
 
     chain = prompt_template | llm
+    repair_chain = repair_prompt_template | llm
     
     # 使用线程池并行处理
     processed_data = [None] * len(data)  # 预分配结果列表
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有任务
         future_to_idx = {
-            executor.submit(process_single_item, chain, item, language): idx
+            executor.submit(process_single_item, chain, repair_chain, item, language, max_ai_attempts): idx
             for idx, item in enumerate(data)
         }
         
@@ -169,6 +250,9 @@ def process_all_items(data: List[Dict], model_name: str, language: str, max_work
 
 def main():
     args = parse_args()
+    if args.max_ai_attempts < 1:
+        raise ValueError("--max_ai_attempts must be at least 1")
+
     model_name = require_env("MODEL_NAME")
     language = require_env("LANGUAGE")
 
@@ -200,7 +284,8 @@ def main():
         data,
         model_name,
         language,
-        args.max_workers
+        args.max_workers,
+        args.max_ai_attempts
     )
     
     # 保存结果
