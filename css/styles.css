@@ -630,6 +630,40 @@ main {
   background-color: var(--background-light);
 }
 
+.paper-card.github-linked-paper::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: calc(var(--radius-md) + 3px);
+  padding: 3px;
+  background: linear-gradient(120deg, #16a34a, #06b6d4, #6366f1, #d946ef, #f97316, #16a34a);
+  background-size: 280% 280%;
+  pointer-events: none;
+  z-index: 3;
+  animation: githubCardFrameGlow 5s ease infinite;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.paper-card.github-linked-paper:hover::before {
+  inset: -4px;
+}
+
+@keyframes githubCardFrameGlow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
 .paper-card-header {
   padding: 16px;
   border-bottom: 1px solid var(--border-color);

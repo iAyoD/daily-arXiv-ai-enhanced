@@ -1148,7 +1148,7 @@ function renderPapers() {
   filteredPapers.forEach((paper, index) => {
     const paperCard = document.createElement('div');
     // 添加匹配高亮类
-    paperCard.className = `paper-card ${paper.isMatched ? 'matched-paper' : ''}`;
+    paperCard.className = `paper-card ${paper.isMatched ? 'matched-paper' : ''} ${paper.code_url ? 'github-linked-paper' : ''}`;
     paperCard.dataset.id = paper.id || paper.url;
 
     if (paper.isMatched) {
