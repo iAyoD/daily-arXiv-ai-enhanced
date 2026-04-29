@@ -1159,6 +1159,9 @@ function renderPapers() {
     const categoryTags = paper.allCategories ?
       paper.allCategories.map(cat => `<span class="category-tag">${cat}</span>`).join('') :
       `<span class="category-tag">${paper.category}</span>`;
+    const githubTag = paper.code_url ?
+      '<span class="category-tag github-code-tag" title="This paper includes a GitHub link">GitHub</span>' :
+      '';
 
     // 组合需要高亮的词：关键词 + 文本搜索
     const titleSummaryTerms = [];
@@ -1210,6 +1213,7 @@ function renderPapers() {
         <p class="paper-card-authors">${formattedAuthors}</p>
         <div class="paper-card-categories">
           ${categoryTags}
+          ${githubTag}
         </div>
       </div>
       <div class="paper-card-body">
@@ -1301,13 +1305,16 @@ function showPaperDetails(paper, paperIndex) {
 
   // 添加匹配标记
   const matchedPaperClass = paper.isMatched ? 'matched-paper-details' : '';
+  const githubStatus = paper.code_url ?
+    `<span class="github-link-status github-code-tag">Yes</span> <a href="${paper.code_url}" target="_blank" class="github-code-url">${paper.code_url}</a>` :
+    '<span class="github-link-status github-link-status-empty">No</span>';
 
   const modalContent = `
     <div class="paper-details ${matchedPaperClass}">
       <p><strong>Authors: </strong>${highlightedAuthors}</p>
       <p><strong>Categories: </strong>${categoryDisplay}</p>
       <p><strong>Date: </strong>${formatDate(paper.date)}</p>
-      <p><strong>Has GitHub Link: </strong>${paper.code_url ? `Yes (<a href="${paper.code_url}" target="_blank" style="word-break: break-all;">${paper.code_url}</a>)` : 'No'}</p>
+      <p class="github-link-row"><strong>Has GitHub Link: </strong>${githubStatus}</p>
       
       
       <h3>TL;DR</h3>
