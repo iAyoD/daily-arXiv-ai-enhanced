@@ -2,14 +2,10 @@ import os
 import json
 import sys
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import timezone
-from email.utils import parsedate_to_datetime
 from json import JSONDecodeError
 from pathlib import Path
-from threading import Lock
-from typing import List, Dict, Optional
+from typing import List, Dict
 import requests
 
 import argparse
@@ -41,11 +37,6 @@ JSON_SCHEMA_INSTRUCTION = (
     "Every field is required and must be non-empty. "
     "Do not wrap the JSON in Markdown or add any text outside the JSON object."
 )
-SENSITIVE_CHECK_URL = "https://spam.dw-dengwei.workers.dev"
-SENSITIVE_CHECK_TIMEOUT_SECONDS = 10
-SENSITIVE_CHECK_MIN_INTERVAL_SECONDS = 1.5
-SENSITIVE_CHECK_MAX_ATTEMPTS = 5
-SENSITIVE_CHECK_RETRY_BASE_SECONDS = 10
 
 
 def require_env(name: str) -> str:
@@ -53,100 +44,6 @@ def require_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"Required environment variable {name} is not set")
     return value
-
-
-class SensitiveChecker:
-    def __init__(
-        self,
-        url: str = SENSITIVE_CHECK_URL,
-        timeout_seconds: int = SENSITIVE_CHECK_TIMEOUT_SECONDS,
-        min_interval_seconds: float = SENSITIVE_CHECK_MIN_INTERVAL_SECONDS,
-        max_attempts: int = SENSITIVE_CHECK_MAX_ATTEMPTS,
-        retry_base_seconds: int = SENSITIVE_CHECK_RETRY_BASE_SECONDS,
-    ) -> None:
-        if min_interval_seconds < 0:
-            raise ValueError("Sensitive check min interval must be non-negative")
-        if max_attempts < 1:
-            raise ValueError("Sensitive check max attempts must be at least 1")
-        if retry_base_seconds < 0:
-            raise ValueError("Sensitive check retry base must be non-negative")
-
-        self.url = url
-        self.timeout_seconds = timeout_seconds
-        self.min_interval_seconds = min_interval_seconds
-        self.max_attempts = max_attempts
-        self.retry_base_seconds = retry_base_seconds
-        self._lock = Lock()
-        self._next_allowed_at = 0.0
-
-    def is_sensitive(self, content: str, item_id: str, field_name: str) -> bool:
-        if not isinstance(content, str):
-            raise TypeError(f"Sensitive check content for {item_id} {field_name} must be text")
-
-        for attempt in range(1, self.max_attempts + 1):
-            resp = self._post_with_rate_limit(content)
-            if resp.status_code == 429 and attempt < self.max_attempts:
-                delay_seconds = self._retry_delay_seconds(resp, attempt)
-                print(
-                    f"Sensitive check rate limited for {item_id} {field_name}; "
-                    f"retrying in {delay_seconds:.1f}s "
-                    f"(attempt {attempt + 1}/{self.max_attempts})",
-                    file=sys.stderr,
-                )
-                self._defer_requests(delay_seconds)
-                continue
-
-            resp.raise_for_status()
-            result = resp.json()
-            if not isinstance(result, dict):
-                raise RuntimeError(
-                    f"Sensitive check response for {item_id} {field_name} is not a JSON object"
-                )
-            if "sensitive" not in result:
-                raise RuntimeError(
-                    f"Sensitive check response for {item_id} {field_name} missing 'sensitive' field"
-                )
-            if not isinstance(result["sensitive"], bool):
-                raise RuntimeError(
-                    f"Sensitive check response for {item_id} {field_name} has non-boolean 'sensitive' field"
-                )
-            return result["sensitive"]
-
-        raise RuntimeError(f"Sensitive check exhausted retries for {item_id} {field_name}")
-
-    def _post_with_rate_limit(self, content: str) -> requests.Response:
-        with self._lock:
-            wait_seconds = self._next_allowed_at - time.monotonic()
-            if wait_seconds > 0:
-                time.sleep(wait_seconds)
-
-            resp = requests.post(
-                self.url,
-                json={"text": content},
-                timeout=self.timeout_seconds,
-            )
-            self._next_allowed_at = time.monotonic() + self.min_interval_seconds
-            return resp
-
-    def _defer_requests(self, delay_seconds: float) -> None:
-        with self._lock:
-            self._next_allowed_at = max(
-                self._next_allowed_at,
-                time.monotonic() + delay_seconds,
-            )
-
-    def _retry_delay_seconds(self, resp: requests.Response, attempt: int) -> float:
-        retry_after = resp.headers.get("Retry-After")
-        if retry_after:
-            try:
-                return max(0.0, float(retry_after))
-            except ValueError:
-                retry_after_date = parsedate_to_datetime(retry_after)
-                if retry_after_date.tzinfo is None:
-                    retry_after_date = retry_after_date.replace(tzinfo=timezone.utc)
-                return max(0.0, retry_after_date.timestamp() - time.time())
-
-        return float(self.retry_base_seconds * (2 ** (attempt - 1)))
 
 
 def parse_args():
@@ -223,8 +120,7 @@ def process_single_item(
     item: Dict,
     language: str,
     max_ai_attempts: int,
-    sensitive_checker: SensitiveChecker,
-) -> Optional[Dict]:
+) -> Dict:
     def check_github_code(content: str) -> Dict:
         """提取并验证 GitHub 链接"""
         code_info = {}
@@ -275,21 +171,12 @@ def process_single_item(
     if not isinstance(summary, str):
         raise ValueError(f"Item {item_id} is missing text summary")
 
-    # 检查 summary 字段
-    if sensitive_checker.is_sensitive(summary, item_id, "summary"):
-        return None
-
     # 检测代码可用性
     code_info = check_github_code(summary)
     if code_info:
         item.update(code_info)
 
     item['AI'] = generate_ai_fields(chain, repair_chain, item, language, max_ai_attempts)
-
-    # 检查 AI 生成字段，合并为一次请求以避免触发接口限流。
-    ai_content = "\n".join(str(v) for v in item.get("AI", {}).values())
-    if sensitive_checker.is_sensitive(ai_content, item_id, "AI"):
-        return None
     return item
 
 
@@ -299,7 +186,7 @@ def process_all_items(
     language: str,
     max_workers: int,
     max_ai_attempts: int,
-) -> List[Optional[Dict]]:
+) -> List[Dict]:
     """并行处理所有数据项"""
     llm = ChatOpenAI(
         model=model_name,
@@ -329,7 +216,6 @@ def process_all_items(
 
     chain = prompt_template | llm
     repair_chain = repair_prompt_template | llm
-    sensitive_checker = SensitiveChecker()
     
     # 使用线程池并行处理
     processed_data = [None] * len(data)  # 预分配结果列表
@@ -343,7 +229,6 @@ def process_all_items(
                 item,
                 language,
                 max_ai_attempts,
-                sensitive_checker,
             ): idx
             for idx, item in enumerate(data)
         }
@@ -407,8 +292,7 @@ def main():
     # 保存结果
     with open(target_file, "w") as f:
         for item in processed_data:
-            if item is not None:
-                f.write(json.dumps(item) + "\n")
+            f.write(json.dumps(item) + "\n")
 
 if __name__ == "__main__":
     main()
