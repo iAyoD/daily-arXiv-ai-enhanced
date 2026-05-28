@@ -73,7 +73,8 @@ else
 fi
 
 cd daily_arxiv
-scrapy crawl arxiv -o ../data/${today}.jsonl
+scrapy crawl arxiv -O ../data/${today}.jsonl
+python daily_arxiv/validate_crawl.py --data ../data/${today}.jsonl
 
 if [ ! -f "../data/${today}.jsonl" ]; then
     echo "爬取失败，未生成数据文件 / Crawling failed, no data file generated"

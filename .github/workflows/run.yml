@@ -66,7 +66,8 @@ jobs:
         
         # 使用Scrapy爬取
         # Use Scrapy to crawl
-        scrapy crawl arxiv -o ../data/${today}.jsonl
+        scrapy crawl arxiv -O ../data/${today}.jsonl
+        python daily_arxiv/validate_crawl.py --data ../data/${today}.jsonl
         
         # 检查爬取是否成功 / Check if crawling was successful
         if [ ! -f "../data/${today}.jsonl" ]; then
