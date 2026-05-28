@@ -121,6 +121,19 @@ def process_single_item(
     language: str,
     max_ai_attempts: int,
 ) -> Dict:
+    def github_search_content(item_data: Dict) -> str:
+        content_parts = [
+            item_data.get("title", ""),
+            item_data.get("summary", ""),
+            item_data.get("comment", ""),
+        ]
+        external_urls = item_data.get("external_urls", [])
+        if external_urls:
+            if not isinstance(external_urls, list):
+                raise ValueError(f"Item {item_data.get('id', 'unknown')} external_urls must be a list")
+            content_parts.extend(str(url) for url in external_urls)
+        return "\n".join(str(part) for part in content_parts if part)
+
     def check_github_code(content: str) -> Dict:
         """提取并验证 GitHub 链接"""
         code_info = {}
@@ -132,7 +145,7 @@ def process_single_item(
         if match:
             owner, repo = match.groups()
             # 清理 repo 名称，去掉可能的 .git 后缀或末尾的标点
-            repo = repo.rstrip(".git").rstrip(".,)")
+            repo = repo.removesuffix(".git").rstrip(".,)")
             
             full_url = f"https://github.com/{owner}/{repo}"
             code_info["code_url"] = full_url
@@ -154,7 +167,7 @@ def process_single_item(
             return code_info
 
         # 2. 如果没有 github.com，尝试匹配 github.io
-        github_io_pattern = r"https?://[a-zA-Z0-9-_]+\.github\.io(?:/[a-zA-Z0-9-_\.]+)*"
+        github_io_pattern = r"https?://[a-zA-Z0-9-_]+\.github\.io[^\s,)]*"
         match_io = re.search(github_io_pattern, content)
         
         if match_io:
@@ -172,7 +185,7 @@ def process_single_item(
         raise ValueError(f"Item {item_id} is missing text summary")
 
     # 检测代码可用性
-    code_info = check_github_code(summary)
+    code_info = check_github_code(github_search_content(item))
     if code_info:
         item.update(code_info)
 

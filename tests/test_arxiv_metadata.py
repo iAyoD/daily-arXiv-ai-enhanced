@@ -55,7 +55,7 @@ ABS_HTML = """
     </div>
     <blockquote class="abstract mathjax">
       <span class="descriptor">Abstract:</span>
-      This paper studies robots.
+      This paper studies robots. See <a href="https://github.com/example/robot-code">this https URL</a>.
     </blockquote>
     <table>
       <tr>
@@ -67,6 +67,8 @@ ABS_HTML = """
         </td>
       </tr>
     </table>
+    <a href="https://arxiv.org/pdf/2605.00001">PDF</a>
+    <a href="https://example.github.io/robot-project/">Project</a>
   </body>
 </html>
 """
@@ -104,9 +106,16 @@ class ArxivMetadataTests(unittest.TestCase):
         self.assertEqual(item["id"], "2605.00001")
         self.assertEqual(item["title"], "Example Robot Paper")
         self.assertEqual(item["authors"], ["First Author", "Second Author"])
-        self.assertEqual(item["summary"], "This paper studies robots.")
+        self.assertEqual(item["summary"], "This paper studies robots. See this https URL .")
         self.assertEqual(item["categories"], ["cs.RO", "cs.LG"])
         self.assertEqual(item["comment"], "10 pages")
+        self.assertEqual(
+            item["external_urls"],
+            [
+                "https://github.com/example/robot-code",
+                "https://example.github.io/robot-project/",
+            ],
+        )
 
 
 if __name__ == "__main__":

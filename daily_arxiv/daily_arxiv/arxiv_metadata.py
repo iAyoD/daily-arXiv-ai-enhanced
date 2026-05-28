@@ -2,6 +2,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set
+from urllib.parse import urlparse
 
 DEFAULT_LIST_SHOW = 2000
 REQUIRED_PAPER_FIELDS = ("id", "pdf", "abs", "authors", "title", "categories", "summary")
@@ -92,6 +93,7 @@ def parse_abs_page(selector, paper_id: str, target_categories: Sequence[str]) ->
             selector.css("blockquote.abstract ::text, blockquote.abstract::text").getall(),
             "Abstract:",
         ),
+        "external_urls": _extract_external_urls(selector),
     }
     validate_paper_item(item, target_categories)
     return item
@@ -160,6 +162,19 @@ def _extract_abs_categories(selector) -> List[str]:
     )
     categories = re.findall(r"\(([^)]+)\)", subjects_text)
     return _unique_preserving_order(category.strip() for category in categories if category.strip())
+
+
+def _extract_external_urls(selector) -> List[str]:
+    urls = []
+    for href in selector.css("a::attr(href)").getall():
+        href = href.strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        host = urlparse(href).netloc.lower()
+        if host in {"arxiv.org", "www.arxiv.org"}:
+            continue
+        urls.append(href)
+    return _unique_preserving_order(urls)
 
 
 def _clean_descriptor_text(text_parts: Iterable[str], descriptor: str) -> str:
