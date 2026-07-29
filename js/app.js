@@ -14,6 +14,378 @@ let currentFilteredPapers = []; // 当前过滤后的论文列表
 let textSearchQuery = ''; // 实时文本搜索查询
 let previousActiveKeywords = null; // 文本搜索激活时，暂存之前的关键词激活集合
 let previousActiveAuthors = null; // 文本搜索激活时，暂存之前的作者激活集合
+const READING_LIST_STORAGE_KEY = 'dailyArxivReadingList';
+const READING_LIST_SORT_STORAGE_KEY = 'dailyArxivReadingListSort';
+const READING_LIST_SCHEMA_VERSION = 1;
+const READING_LIST_SORT_OPTIONS = new Set([
+  'added-desc',
+  'added-asc',
+  'date-desc',
+  'date-asc'
+]);
+let readingListEntries = [];
+let readingListSort = 'added-desc';
+let activeModalPaper = null;
+let currentModalPapers = [];
+let currentModalSource = 'papers';
+let readingListReturnFocus = null;
+
+function getPaperKey(paper) {
+  if (!paper || typeof paper.url !== 'string' || paper.url.trim() === '') {
+    throw new TypeError('A paper must include a non-empty URL to be stored in the reading list.');
+  }
+
+  return paper.url.trim();
+}
+
+function validateReadingListPaper(paper) {
+  if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
+    throw new TypeError('Each reading-list paper must be an object.');
+  }
+
+  ['title', 'url', 'authors', 'date'].forEach(field => {
+    if (typeof paper[field] !== 'string' || paper[field].trim() === '') {
+      throw new TypeError(`Reading-list paper field "${field}" must be a non-empty string.`);
+    }
+  });
+
+  getPaperKey(paper);
+}
+
+function validateReadingListEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new TypeError('Each reading-list entry must be an object.');
+  }
+
+  validateReadingListPaper(entry.paper);
+
+  if (typeof entry.addedAt !== 'string' || Number.isNaN(Date.parse(entry.addedAt))) {
+    throw new TypeError('Reading-list entry "addedAt" must be a valid ISO date string.');
+  }
+}
+
+function createReadingListPaperSnapshot(paper) {
+  validateReadingListPaper(paper);
+
+  return {
+    title: paper.title,
+    url: paper.url,
+    authors: paper.authors,
+    category: Array.isArray(paper.category) ? [...paper.category] : paper.category,
+    allCategories: Array.isArray(paper.allCategories) ? [...paper.allCategories] : paper.allCategories,
+    summary: paper.summary,
+    details: paper.details,
+    date: paper.date,
+    id: paper.id,
+    motivation: paper.motivation,
+    method: paper.method,
+    result: paper.result,
+    conclusion: paper.conclusion,
+    code_url: paper.code_url,
+    code_stars: paper.code_stars,
+    code_last_update: paper.code_last_update
+  };
+}
+
+function loadReadingList() {
+  const storedList = localStorage.getItem(READING_LIST_STORAGE_KEY);
+
+  if (storedList === null) {
+    readingListEntries = [];
+  } else {
+    const parsedList = JSON.parse(storedList);
+
+    if (
+      !parsedList ||
+      typeof parsedList !== 'object' ||
+      parsedList.version !== READING_LIST_SCHEMA_VERSION ||
+      !Array.isArray(parsedList.entries)
+    ) {
+      throw new TypeError('Stored reading-list data has an invalid schema.');
+    }
+
+    parsedList.entries.forEach(validateReadingListEntry);
+
+    const uniqueKeys = new Set(parsedList.entries.map(entry => getPaperKey(entry.paper)));
+    if (uniqueKeys.size !== parsedList.entries.length) {
+      throw new TypeError('Stored reading-list data contains duplicate papers.');
+    }
+
+    readingListEntries = parsedList.entries;
+  }
+
+  const storedSort = localStorage.getItem(READING_LIST_SORT_STORAGE_KEY);
+  if (storedSort !== null) {
+    if (!READING_LIST_SORT_OPTIONS.has(storedSort)) {
+      throw new TypeError(`Stored reading-list sort option "${storedSort}" is invalid.`);
+    }
+    readingListSort = storedSort;
+  }
+
+  const sortSelect = document.getElementById('readingListSort');
+  sortSelect.value = readingListSort;
+  updateReadingListUi();
+}
+
+function persistReadingList(nextEntries) {
+  nextEntries.forEach(validateReadingListEntry);
+  const payload = {
+    version: READING_LIST_SCHEMA_VERSION,
+    entries: nextEntries
+  };
+
+  localStorage.setItem(READING_LIST_STORAGE_KEY, JSON.stringify(payload));
+  readingListEntries = nextEntries;
+  updateReadingListUi();
+}
+
+function isPaperInReadingList(paper) {
+  const paperKey = getPaperKey(paper);
+  return readingListEntries.some(entry => getPaperKey(entry.paper) === paperKey);
+}
+
+function setPaperReadingListState(paper, shouldBeSaved) {
+  const paperKey = getPaperKey(paper);
+  const existingIndex = readingListEntries.findIndex(
+    entry => getPaperKey(entry.paper) === paperKey
+  );
+
+  if (shouldBeSaved && existingIndex === -1) {
+    const nextEntries = [
+      ...readingListEntries,
+      {
+        paper: createReadingListPaperSnapshot(paper),
+        addedAt: new Date().toISOString()
+      }
+    ];
+    persistReadingList(nextEntries);
+    return;
+  }
+
+  if (!shouldBeSaved && existingIndex !== -1) {
+    persistReadingList(
+      readingListEntries.filter(entry => getPaperKey(entry.paper) !== paperKey)
+    );
+    return;
+  }
+
+  syncReadingListCheckboxes();
+}
+
+function getSortedReadingListEntries() {
+  const sortedEntries = [...readingListEntries];
+  const direction = readingListSort.endsWith('-asc') ? 1 : -1;
+  const field = readingListSort.startsWith('date-') ? 'date' : 'addedAt';
+
+  sortedEntries.sort((first, second) => {
+    const firstValue = field === 'date' ? first.paper.date : first.addedAt;
+    const secondValue = field === 'date' ? second.paper.date : second.addedAt;
+    const comparison = firstValue.localeCompare(secondValue);
+
+    if (comparison !== 0) {
+      return comparison * direction;
+    }
+
+    return getPaperKey(first.paper).localeCompare(getPaperKey(second.paper));
+  });
+
+  return sortedEntries;
+}
+
+function updateReadingListBadge() {
+  const count = readingListEntries.length;
+  const countElement = document.getElementById('readingListCount');
+  const button = document.getElementById('readingListButton');
+  const summary = document.getElementById('readingListSummary');
+
+  countElement.textContent = String(count);
+  countElement.classList.toggle('visible', count > 0);
+  button.setAttribute(
+    'aria-label',
+    `Open reading list (${count} saved ${count === 1 ? 'paper' : 'papers'})`
+  );
+  summary.textContent = `${count} ${count === 1 ? 'paper' : 'papers'} saved in this browser`;
+}
+
+function syncReadingListCheckboxes() {
+  document.querySelectorAll('.reading-list-checkbox[data-paper-key]').forEach(checkbox => {
+    const isSaved = readingListEntries.some(
+      entry => getPaperKey(entry.paper) === checkbox.dataset.paperKey
+    );
+    checkbox.checked = isSaved;
+
+    const toggle = checkbox.closest(
+      '.paper-reading-toggle, .modal-reading-toggle, .reading-list-item-toggle'
+    );
+    if (toggle) {
+      toggle.classList.toggle('is-selected', isSaved);
+      toggle.title = isSaved ? 'Remove from reading list' : 'Add to reading list';
+    }
+
+    const paperTitle = checkbox.dataset.paperTitle || 'paper';
+    checkbox.setAttribute(
+      'aria-label',
+      `${isSaved ? 'Remove' : 'Add'} ${paperTitle} ${isSaved ? 'from' : 'to'} reading list`
+    );
+  });
+}
+
+function updatePaperPosition() {
+  const paperPosition = document.getElementById('paperPosition');
+
+  if (currentModalPapers.length > 0 && currentPaperIndex >= 0) {
+    paperPosition.textContent = `${currentPaperIndex + 1} / ${currentModalPapers.length}`;
+  } else {
+    paperPosition.textContent = '-';
+  }
+}
+
+function refreshReadingListNavigationContext() {
+  if (currentModalSource !== 'reading-list' || !activeModalPaper) {
+    return;
+  }
+
+  currentModalPapers = getSortedReadingListEntries().map(entry => entry.paper);
+  const activePaperKey = getPaperKey(activeModalPaper);
+  currentPaperIndex = currentModalPapers.findIndex(
+    paper => getPaperKey(paper) === activePaperKey
+  );
+  updatePaperPosition();
+}
+
+function updateReadingListUi() {
+  updateReadingListBadge();
+  renderReadingList();
+  syncReadingListCheckboxes();
+  refreshReadingListNavigationContext();
+}
+
+function formatReadingListTime(isoDate) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(new Date(isoDate));
+}
+
+function renderReadingList() {
+  const body = document.getElementById('readingListBody');
+  body.replaceChildren();
+
+  if (readingListEntries.length === 0) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'reading-list-empty';
+
+    const emptyIcon = document.createElement('div');
+    emptyIcon.className = 'reading-list-empty-icon';
+    emptyIcon.setAttribute('aria-hidden', 'true');
+    emptyIcon.textContent = '◇';
+
+    const emptyTitle = document.createElement('h3');
+    emptyTitle.textContent = 'No papers saved yet';
+
+    const emptyDescription = document.createElement('p');
+    emptyDescription.textContent =
+      'Hover over a paper and select its checkbox to add it to your reading list.';
+
+    emptyState.append(emptyIcon, emptyTitle, emptyDescription);
+    body.appendChild(emptyState);
+    return;
+  }
+
+  const sortedEntries = getSortedReadingListEntries();
+
+  sortedEntries.forEach((entry, index) => {
+    const paperKey = getPaperKey(entry.paper);
+    const item = document.createElement('article');
+    item.className = 'reading-list-item';
+    item.dataset.paperKey = paperKey;
+
+    const openButton = document.createElement('button');
+    openButton.type = 'button';
+    openButton.className = 'reading-list-item-main';
+
+    const title = document.createElement('h3');
+    title.textContent = entry.paper.title;
+
+    const authors = document.createElement('p');
+    authors.className = 'reading-list-item-authors';
+    authors.textContent = entry.paper.authors;
+
+    const metadata = document.createElement('div');
+    metadata.className = 'reading-list-item-metadata';
+
+    const paperDate = document.createElement('span');
+    paperDate.textContent = `Paper · ${formatDate(entry.paper.date)}`;
+
+    const addedDate = document.createElement('span');
+    addedDate.textContent = `Added · ${formatReadingListTime(entry.addedAt)}`;
+
+    metadata.append(paperDate, addedDate);
+    openButton.append(title, authors, metadata);
+    openButton.addEventListener('click', () => {
+      const navigationPapers = sortedEntries.map(sortedEntry => sortedEntry.paper);
+      closeReadingList(false);
+      showPaperDetails(entry.paper, index + 1, navigationPapers, 'reading-list');
+    });
+
+    const removeToggle = document.createElement('label');
+    removeToggle.className = 'reading-list-item-toggle is-selected';
+    removeToggle.title = 'Remove from reading list';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'reading-list-checkbox';
+    checkbox.dataset.paperKey = paperKey;
+    checkbox.dataset.paperTitle = entry.paper.title;
+    checkbox.checked = true;
+    checkbox.setAttribute('aria-label', `Remove ${entry.paper.title} from reading list`);
+    checkbox.addEventListener('change', event => {
+      setPaperReadingListState(entry.paper, event.target.checked);
+    });
+
+    const checkboxMark = document.createElement('span');
+    checkboxMark.className = 'reading-list-checkbox-mark';
+    checkboxMark.setAttribute('aria-hidden', 'true');
+
+    removeToggle.append(checkbox, checkboxMark);
+    item.append(openButton, removeToggle);
+    body.appendChild(item);
+  });
+}
+
+function syncBodyScrollLock() {
+  const hasOpenOverlay =
+    document.getElementById('paperModal').classList.contains('active') ||
+    document.getElementById('datePickerModal').classList.contains('active') ||
+    document.getElementById('readingListModal').classList.contains('active');
+  document.body.style.overflow = hasOpenOverlay ? 'hidden' : '';
+}
+
+function openReadingList() {
+  const modal = document.getElementById('readingListModal');
+  const datePickerModal = document.getElementById('datePickerModal');
+  if (datePickerModal.classList.contains('active')) {
+    toggleDatePicker();
+  }
+  readingListReturnFocus = document.activeElement;
+  renderReadingList();
+  modal.classList.add('active');
+  modal.setAttribute('aria-hidden', 'false');
+  syncBodyScrollLock();
+  document.getElementById('closeReadingList').focus();
+}
+
+function closeReadingList(restoreFocus = true) {
+  const modal = document.getElementById('readingListModal');
+  modal.classList.remove('active');
+  modal.setAttribute('aria-hidden', 'true');
+  syncBodyScrollLock();
+
+  if (restoreFocus && readingListReturnFocus instanceof HTMLElement) {
+    readingListReturnFocus.focus();
+  }
+  readingListReturnFocus = null;
+}
 
 // 加载用户的关键词设置
 function loadUserKeywords() {
@@ -209,6 +581,7 @@ function toggleAuthorFilter(author) {
 
 document.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
+  loadReadingList();
 
   fetchGitHubStats();
 
@@ -263,6 +636,58 @@ function initEventListeners() {
 
   document.getElementById('dateRangeMode').addEventListener('change', toggleRangeMode);
 
+  const readingListButton = document.getElementById('readingListButton');
+  const readingListModal = document.getElementById('readingListModal');
+  const readingListContent = document.querySelector('.reading-list-content');
+  const readingListSortSelect = document.getElementById('readingListSort');
+
+  readingListButton.addEventListener('click', event => {
+    event.stopPropagation();
+    openReadingList();
+  });
+
+  document.getElementById('closeReadingList').addEventListener('click', () => {
+    closeReadingList();
+  });
+
+  readingListModal.addEventListener('click', event => {
+    if (event.target === readingListModal) {
+      closeReadingList();
+    }
+  });
+
+  readingListContent.addEventListener('click', event => {
+    event.stopPropagation();
+  });
+
+  readingListSortSelect.addEventListener('change', event => {
+    const nextSort = event.target.value;
+    if (!READING_LIST_SORT_OPTIONS.has(nextSort)) {
+      throw new TypeError(`Reading-list sort option "${nextSort}" is invalid.`);
+    }
+
+    localStorage.setItem(READING_LIST_SORT_STORAGE_KEY, nextSort);
+    readingListSort = nextSort;
+    updateReadingListUi();
+  });
+
+  const modalReadingCheckbox = document.getElementById('modalReadingCheckbox');
+  modalReadingCheckbox.addEventListener('change', event => {
+    if (!activeModalPaper) {
+      throw new Error('Cannot update the reading list without an active paper.');
+    }
+    setPaperReadingListState(activeModalPaper, event.target.checked);
+  });
+
+  window.addEventListener('storage', event => {
+    if (
+      event.key === READING_LIST_STORAGE_KEY ||
+      event.key === READING_LIST_SORT_STORAGE_KEY
+    ) {
+      loadReadingList();
+    }
+  });
+
   // 其他原有的事件监听器
   document.getElementById('closeModal').addEventListener('click', closeModal);
 
@@ -301,10 +726,15 @@ function initEventListeners() {
     if (event.key === 'Escape') {
       const paperModal = document.getElementById('paperModal');
       const datePickerModal = document.getElementById('datePickerModal');
+      const readingListModal = document.getElementById('readingListModal');
 
       // 关闭论文模态框
       if (paperModal.classList.contains('active')) {
         closeModal();
+      }
+      // 关闭待读清单
+      else if (readingListModal.classList.contains('active')) {
+        closeReadingList();
       }
       // 关闭日期选择器模态框
       else if (datePickerModal.classList.contains('active')) {
@@ -328,10 +758,15 @@ function initEventListeners() {
     else if (event.key === ' ' || event.key === 'Spacebar') {
       const paperModal = document.getElementById('paperModal');
       const datePickerModal = document.getElementById('datePickerModal');
+      const readingListModal = document.getElementById('readingListModal');
 
       // 只有在没有输入框焦点且日期选择器没有打开时才触发
       // 现在允许在论文模态框打开时也能使用R键切换到随机论文
-      if (!isInputFocused && !datePickerModal.classList.contains('active')) {
+      if (
+        !isInputFocused &&
+        !datePickerModal.classList.contains('active') &&
+        !readingListModal.classList.contains('active')
+      ) {
         event.preventDefault(); // 防止页面刷新
         event.stopPropagation(); // 阻止事件冒泡
         showRandomPaper();
@@ -1147,9 +1582,11 @@ function renderPapers() {
 
   filteredPapers.forEach((paper, index) => {
     const paperCard = document.createElement('div');
+    const paperKey = getPaperKey(paper);
+    const isSavedForReading = isPaperInReadingList(paper);
     // 添加匹配高亮类
     paperCard.className = `paper-card ${paper.isMatched ? 'matched-paper' : ''} ${paper.code_url ? 'github-linked-paper' : ''}`;
-    paperCard.dataset.id = paper.id || paper.url;
+    paperCard.dataset.id = paperKey;
 
     if (paper.isMatched) {
       // 添加匹配原因提示
@@ -1206,6 +1643,11 @@ function renderPapers() {
     // }
 
     paperCard.innerHTML = `
+      <label class="paper-reading-toggle ${isSavedForReading ? 'is-selected' : ''}" title="${isSavedForReading ? 'Remove from reading list' : 'Add to reading list'}">
+        <input class="reading-list-checkbox" type="checkbox" ${isSavedForReading ? 'checked' : ''}>
+        <span class="reading-list-checkbox-mark" aria-hidden="true"></span>
+        <span class="paper-reading-label">Read later</span>
+      </label>
       <div class="paper-card-index">${index + 1}</div>
       ${paper.isMatched ? '<div class="match-badge" title="匹配您的搜索条件"></div>' : ''}
       <div class="paper-card-header">
@@ -1227,16 +1669,50 @@ function renderPapers() {
       </div>
     `;
 
+    const readingToggle = paperCard.querySelector('.paper-reading-toggle');
+    const readingCheckbox = readingToggle.querySelector('.reading-list-checkbox');
+    readingCheckbox.dataset.paperKey = paperKey;
+    readingCheckbox.dataset.paperTitle = paper.title;
+    readingCheckbox.setAttribute(
+      'aria-label',
+      `${isSavedForReading ? 'Remove' : 'Add'} ${paper.title} ${isSavedForReading ? 'from' : 'to'} reading list`
+    );
+    readingToggle.addEventListener('click', event => {
+      event.stopPropagation();
+    });
+    readingCheckbox.addEventListener('change', event => {
+      setPaperReadingListState(paper, event.target.checked);
+    });
+
     paperCard.addEventListener('click', () => {
       currentPaperIndex = index; // 记录当前点击的论文索引
-      showPaperDetails(paper, index + 1);
+      showPaperDetails(paper, index + 1, currentFilteredPapers, 'papers');
     });
 
     container.appendChild(paperCard);
   });
 }
 
-function showPaperDetails(paper, paperIndex) {
+function showPaperDetails(
+  paper,
+  paperIndex,
+  navigationPapers = currentFilteredPapers,
+  navigationSource = 'papers'
+) {
+  validateReadingListPaper(paper);
+  if (!Array.isArray(navigationPapers)) {
+    throw new TypeError('Paper navigation context must be an array.');
+  }
+
+  activeModalPaper = paper;
+  currentModalPapers = [...navigationPapers];
+  currentModalSource = navigationSource;
+  const activePaperKey = getPaperKey(paper);
+  const navigationIndex = currentModalPapers.findIndex(
+    navigationPaper => getPaperKey(navigationPaper) === activePaperKey
+  );
+  currentPaperIndex = navigationIndex >= 0 ? navigationIndex : paperIndex - 1;
+
   const modal = document.getElementById('paperModal');
   const modalTitle = document.getElementById('modalTitle');
   const modalBody = document.getElementById('modalBody');
@@ -1257,7 +1733,8 @@ function showPaperDetails(paper, paperIndex) {
     : paper.title;
 
   // 在标题前添加索引号
-  modalTitle.innerHTML = paperIndex ? `<span class="paper-index-badge">${paperIndex}</span> ${highlightedTitle}` : highlightedTitle;
+  const displayIndex = currentPaperIndex >= 0 ? currentPaperIndex + 1 : paperIndex;
+  modalTitle.innerHTML = displayIndex ? `<span class="paper-index-badge">${displayIndex}</span> ${highlightedTitle}` : highlightedTitle;
 
   const abstractText = paper.details || '';
 
@@ -1353,6 +1830,10 @@ function showPaperDetails(paper, paperIndex) {
   document.getElementById('paperLink').href = paper.url;
   document.getElementById('pdfLink').href = paper.url.replace('abs', 'pdf');
   document.getElementById('htmlLink').href = paper.url.replace('abs', 'html');
+  const modalReadingCheckbox = document.getElementById('modalReadingCheckbox');
+  modalReadingCheckbox.dataset.paperKey = activePaperKey;
+  modalReadingCheckbox.dataset.paperTitle = paper.title;
+  syncReadingListCheckboxes();
 
   // --- GitHub Button Logic ---
   const githubLink = document.getElementById('githubLink');
@@ -1367,17 +1848,13 @@ function showPaperDetails(paper, paperIndex) {
   // ---------------------------
 
   // 提示词来自：https://papers.cool/
-  prompt = `请你阅读这篇文章${paper.url.replace('abs', 'pdf')},总结一下这篇文章解决的问题、相关工作、研究方法、做了什么实验及其结果、结论，最后整体总结一下这篇文章的内容`
+  const prompt = `请你阅读这篇文章${paper.url.replace('abs', 'pdf')},总结一下这篇文章解决的问题、相关工作、研究方法、做了什么实验及其结果、结论，最后整体总结一下这篇文章的内容`;
   document.getElementById('kimiChatLink').href = `https://www.kimi.com/_prefill_chat?prefill_prompt=${prompt}&system_prompt=你是一个学术助手，后面的对话将围绕着以下论文内容进行，已经通过链接给出了论文的PDF和论文已有的FAQ。用户将继续向你咨询论文的相关问题，请你作出专业的回答，不要出现第一人称，当涉及到分点回答时，鼓励你以markdown格式输出。&send_immediately=true&force_search=true`;
 
-  // 更新论文位置信息
-  const paperPosition = document.getElementById('paperPosition');
-  if (paperPosition && currentFilteredPapers.length > 0) {
-    paperPosition.textContent = `${currentPaperIndex + 1} / ${currentFilteredPapers.length}`;
-  }
+  updatePaperPosition();
 
   modal.classList.add('active');
-  document.body.style.overflow = 'hidden';
+  syncBodyScrollLock();
 }
 
 function closeModal() {
@@ -1388,25 +1865,45 @@ function closeModal() {
   modalBody.scrollTop = 0;
 
   modal.classList.remove('active');
-  document.body.style.overflow = '';
+  activeModalPaper = null;
+  currentModalPapers = [];
+  currentModalSource = 'papers';
+  const modalReadingCheckbox = document.getElementById('modalReadingCheckbox');
+  modalReadingCheckbox.removeAttribute('data-paper-key');
+  modalReadingCheckbox.removeAttribute('data-paper-title');
+  modalReadingCheckbox.checked = false;
+  syncBodyScrollLock();
 }
 
 // 导航到上一篇论文
 function navigateToPreviousPaper() {
-  if (currentFilteredPapers.length === 0) return;
+  if (currentModalPapers.length === 0) return;
 
-  currentPaperIndex = currentPaperIndex > 0 ? currentPaperIndex - 1 : currentFilteredPapers.length - 1;
-  const paper = currentFilteredPapers[currentPaperIndex];
-  showPaperDetails(paper, currentPaperIndex + 1);
+  currentPaperIndex = currentPaperIndex > 0 ? currentPaperIndex - 1 : currentModalPapers.length - 1;
+  const paper = currentModalPapers[currentPaperIndex];
+  showPaperDetails(
+    paper,
+    currentPaperIndex + 1,
+    currentModalPapers,
+    currentModalSource
+  );
 }
 
 // 导航到下一篇论文
 function navigateToNextPaper() {
-  if (currentFilteredPapers.length === 0) return;
+  if (currentModalPapers.length === 0) return;
 
-  currentPaperIndex = currentPaperIndex < currentFilteredPapers.length - 1 ? currentPaperIndex + 1 : 0;
-  const paper = currentFilteredPapers[currentPaperIndex];
-  showPaperDetails(paper, currentPaperIndex + 1);
+  currentPaperIndex =
+    currentPaperIndex >= 0 && currentPaperIndex < currentModalPapers.length - 1
+      ? currentPaperIndex + 1
+      : 0;
+  const paper = currentModalPapers[currentPaperIndex];
+  showPaperDetails(
+    paper,
+    currentPaperIndex + 1,
+    currentModalPapers,
+    currentModalSource
+  );
 }
 
 // 显示随机论文
@@ -1425,7 +1922,7 @@ function showRandomPaper() {
   currentPaperIndex = randomIndex;
 
   // 显示随机论文
-  showPaperDetails(randomPaper, currentPaperIndex + 1);
+  showPaperDetails(randomPaper, currentPaperIndex + 1, currentFilteredPapers, 'papers');
 
   // 显示随机论文指示器
   showRandomPaperIndicator();
@@ -1462,15 +1959,13 @@ function toggleDatePicker() {
   datePicker.classList.toggle('active');
 
   if (datePicker.classList.contains('active')) {
-    document.body.style.overflow = 'hidden';
-
     // 重新初始化日期选择器以确保它反映最新的可用日期
     if (flatpickrInstance) {
       flatpickrInstance.setDate(currentDate, false);
     }
-  } else {
-    document.body.style.overflow = '';
   }
+
+  syncBodyScrollLock();
 }
 
 function toggleView() {

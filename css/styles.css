@@ -2410,3 +2410,531 @@ footer {
   display: flex;
   align-items: center;
 }
+
+/* Reading list */
+.reading-list-button {
+  position: relative;
+}
+
+.reading-list-count {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: var(--gradient-primary);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  opacity: 0;
+  transform: scale(0.7);
+  visibility: hidden;
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+}
+
+.reading-list-count.visible {
+  opacity: 1;
+  transform: scale(1);
+  visibility: visible;
+}
+
+.reading-list-checkbox {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.reading-list-checkbox-mark {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border: 2px solid #a5b4fc;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(30, 41, 59, 0.12);
+  transition: var(--transition);
+}
+
+.reading-list-checkbox-mark::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 6px;
+  height: 11px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  opacity: 0;
+  transform: rotate(45deg) scale(0.6);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.reading-list-checkbox:checked + .reading-list-checkbox-mark {
+  border-color: transparent;
+  background: var(--gradient-primary);
+  box-shadow: 0 3px 8px rgba(102, 126, 234, 0.3);
+}
+
+.reading-list-checkbox:checked + .reading-list-checkbox-mark::after {
+  opacity: 1;
+  transform: rotate(45deg) scale(1);
+}
+
+.reading-list-checkbox:focus-visible + .reading-list-checkbox-mark {
+  outline: 3px solid rgba(102, 126, 234, 0.28);
+  outline-offset: 2px;
+}
+
+.paper-card-header {
+  padding-right: 52px;
+}
+
+.paper-reading-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(102, 126, 234, 0.16);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 4px 12px rgba(30, 41, 59, 0.12);
+  opacity: 0;
+  transform: translateY(-4px) scale(0.92);
+  pointer-events: none;
+  transition: var(--transition);
+}
+
+.paper-card:hover .paper-reading-toggle,
+.paper-reading-toggle:focus-within,
+.paper-reading-toggle.is-selected {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.paper-reading-toggle:hover {
+  border-color: rgba(102, 126, 234, 0.38);
+  background: #ffffff;
+  box-shadow: 0 5px 14px rgba(102, 126, 234, 0.18);
+}
+
+.paper-reading-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.paper-modal-header {
+  gap: 16px;
+}
+
+.paper-modal-header h2 {
+  min-width: 0;
+  flex: 1;
+}
+
+.paper-modal-header-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.modal-reading-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 1px solid var(--border-accent);
+  border-radius: 999px;
+  background: rgba(102, 126, 234, 0.05);
+  color: var(--primary-color);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.modal-reading-toggle:hover,
+.modal-reading-toggle:focus-within {
+  border-color: rgba(102, 126, 234, 0.42);
+  background: rgba(102, 126, 234, 0.1);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+}
+
+.modal-reading-toggle.is-selected {
+  border-color: rgba(102, 126, 234, 0.38);
+  background: var(--gradient-light);
+}
+
+.reading-list-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.reading-list-modal.active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.reading-list-content {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid rgba(102, 126, 234, 0.14);
+  border-radius: 18px;
+  background: var(--card-bg-color);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+  transform: translateY(14px) scale(0.98);
+  transition: transform 0.24s ease;
+}
+
+.reading-list-modal.active .reading-list-content {
+  transform: translateY(0) scale(1);
+}
+
+.reading-list-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.reading-list-header h2 {
+  margin: 0 0 3px;
+  font-size: 22px;
+  line-height: 1.3;
+}
+
+.reading-list-header p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.reading-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(248, 250, 252, 0.85);
+}
+
+.reading-list-toolbar label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.reading-list-toolbar select {
+  min-width: 230px;
+  padding: 8px 34px 8px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  outline: none;
+  background: #ffffff;
+  color: var(--text-color);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.reading-list-toolbar select:hover,
+.reading-list-toolbar select:focus {
+  border-color: rgba(102, 126, 234, 0.55);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.reading-list-body {
+  min-height: 260px;
+  overflow-y: auto;
+  padding: 12px;
+  overscroll-behavior: contain;
+}
+
+.reading-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  transition: var(--transition);
+}
+
+.reading-list-item + .reading-list-item {
+  margin-top: 6px;
+}
+
+.reading-list-item:hover,
+.reading-list-item:focus-within {
+  border-color: var(--border-accent);
+  background: rgba(102, 126, 234, 0.045);
+}
+
+.reading-list-item-main {
+  min-width: 0;
+  flex: 1;
+  padding: 13px 8px 13px 13px;
+  text-align: left;
+  border-radius: 12px;
+}
+
+.reading-list-item-main:focus-visible {
+  outline: 3px solid rgba(102, 126, 234, 0.22);
+  outline-offset: -2px;
+}
+
+.reading-list-item-main h3 {
+  display: -webkit-box;
+  margin: 0 0 5px;
+  overflow: hidden;
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.reading-list-item-authors {
+  margin: 0 0 8px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reading-list-item-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.reading-list-item-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-right: 11px;
+  flex: 0 0 42px;
+  border-radius: 11px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.reading-list-item-toggle:hover,
+.reading-list-item-toggle:focus-within {
+  background: rgba(102, 126, 234, 0.1);
+}
+
+.reading-list-empty {
+  display: flex;
+  min-height: 330px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.reading-list-empty-icon {
+  display: flex;
+  width: 54px;
+  height: 54px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+  border: 1px solid var(--border-accent);
+  border-radius: 17px;
+  background: var(--gradient-light);
+  color: var(--primary-color);
+  font-size: 28px;
+}
+
+.reading-list-empty h3 {
+  margin: 0 0 7px;
+  color: var(--text-color);
+  font-size: 17px;
+}
+
+.reading-list-empty p {
+  max-width: 390px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+@media (hover: none) {
+  .paper-reading-toggle {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .header-center {
+    margin-bottom: 0;
+  }
+
+  .header-controls {
+    gap: 5px;
+  }
+
+  .reading-list-modal {
+    align-items: flex-end;
+    padding: 12px;
+  }
+
+  .reading-list-content {
+    max-height: calc(100vh - 24px);
+    border-radius: 18px;
+  }
+
+  .reading-list-header {
+    padding: 18px 18px 14px;
+  }
+
+  .reading-list-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+    padding: 11px 18px;
+  }
+
+  .reading-list-toolbar select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .reading-list-body {
+    padding: 8px;
+  }
+
+  .reading-list-item {
+    gap: 4px;
+  }
+
+  .reading-list-item-main {
+    padding: 12px 7px 12px 10px;
+  }
+
+  .reading-list-item-toggle {
+    margin-right: 6px;
+  }
+
+  .paper-modal-header {
+    padding: 16px;
+  }
+
+  .modal-reading-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .modal-reading-toggle {
+    width: 36px;
+    justify-content: center;
+    padding: 6px;
+  }
+}
+
+@media (max-width: 520px) {
+  .site-title,
+  #currentDate {
+    display: none;
+  }
+
+  .header-content {
+    gap: 6px;
+  }
+
+  .header-center {
+    flex: 0 0 auto;
+  }
+
+  .header-controls {
+    gap: 2px;
+  }
+
+  .header-controls .icon-button {
+    width: 34px;
+    height: 34px;
+  }
+
+  .reading-list-count {
+    top: -2px;
+    right: -3px;
+  }
+
+  .paper-reading-toggle {
+    top: 8px;
+    right: 8px;
+  }
+
+  .paper-card-header {
+    padding-right: 48px;
+  }
+
+  .reading-list-header h2 {
+    font-size: 20px;
+  }
+
+  .reading-list-empty {
+    min-height: 280px;
+  }
+}
