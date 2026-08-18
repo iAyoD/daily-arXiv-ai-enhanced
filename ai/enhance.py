@@ -2,6 +2,7 @@ import os
 import json
 import sys
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from json import JSONDecodeError
 from pathlib import Path
@@ -37,6 +38,11 @@ JSON_SCHEMA_INSTRUCTION = (
     "Every field is required and must be non-empty. "
     "Do not wrap the JSON in Markdown or add any text outside the JSON object."
 )
+GITHUB_API_CONNECT_TIMEOUT_SECONDS = 10
+GITHUB_API_READ_TIMEOUT_SECONDS = 30
+GITHUB_API_MAX_ATTEMPTS = 4
+GITHUB_API_BACKOFF_BASE_SECONDS = 1
+GITHUB_API_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def require_env(name: str) -> str:
@@ -114,6 +120,103 @@ def generate_ai_fields(chain, repair_chain, item: Dict, language: str, max_ai_at
     raise RuntimeError(f"AI generation failed schema validation for {item_id}") from last_error
 
 
+def fetch_github_repo_metadata(
+    owner: str,
+    repo: str,
+    github_token: str | None,
+    *,
+    max_attempts: int = GITHUB_API_MAX_ATTEMPTS,
+    connect_timeout: float = GITHUB_API_CONNECT_TIMEOUT_SECONDS,
+    read_timeout: float = GITHUB_API_READ_TIMEOUT_SECONDS,
+    backoff_base: float = GITHUB_API_BACKOFF_BASE_SECONDS,
+) -> Dict:
+    """Fetch GitHub repository metadata with bounded transient-error retries."""
+    if max_attempts < 1:
+        raise ValueError("GitHub API max_attempts must be at least 1")
+    if connect_timeout <= 0 or read_timeout <= 0:
+        raise ValueError("GitHub API timeouts must be positive")
+    if backoff_base < 0:
+        raise ValueError("GitHub API backoff_base must not be negative")
+
+    headers = {"Accept": "application/vnd.github+json"}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    api_url = f"https://api.github.com/repos/{owner}/{repo}"
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(
+                api_url,
+                headers=headers,
+                timeout=(connect_timeout, read_timeout),
+            )
+        except (requests.Timeout, requests.ConnectionError) as error:
+            if attempt == max_attempts:
+                raise RuntimeError(
+                    f"GitHub API request for {owner}/{repo} failed "
+                    f"after {max_attempts} attempts"
+                ) from error
+
+            retry_delay = backoff_base * (2 ** (attempt - 1))
+            print(
+                f"Retrying GitHub API request for {owner}/{repo} "
+                f"after {type(error).__name__} "
+                f"(attempt {attempt + 1}/{max_attempts}, delay {retry_delay:g}s)",
+                file=sys.stderr,
+            )
+            time.sleep(retry_delay)
+            continue
+
+        if response.status_code == 200:
+            data = response.json()
+            if not isinstance(data, dict):
+                raise TypeError(f"GitHub API response for {owner}/{repo} is not an object")
+
+            stars = data.get("stargazers_count")
+            pushed_at = data.get("pushed_at")
+            if not isinstance(stars, int) or stars < 0:
+                raise ValueError(
+                    f"GitHub API response for {owner}/{repo} has invalid stargazers_count"
+                )
+            if pushed_at is not None and not isinstance(pushed_at, str):
+                raise ValueError(
+                    f"GitHub API response for {owner}/{repo} has invalid pushed_at"
+                )
+
+            return {
+                "code_stars": stars,
+                "code_last_update": pushed_at[:10] if pushed_at else "",
+            }
+
+        if response.status_code == 404:
+            return {}
+
+        http_error = requests.HTTPError(
+            f"GitHub API request for {owner}/{repo} returned HTTP "
+            f"{response.status_code}",
+            response=response,
+        )
+        if response.status_code not in GITHUB_API_RETRYABLE_STATUS_CODES:
+            raise http_error
+        if attempt == max_attempts:
+            raise RuntimeError(
+                f"GitHub API request for {owner}/{repo} returned HTTP "
+                f"{response.status_code} after {max_attempts} attempts"
+            ) from http_error
+
+        retry_delay = backoff_base * (2 ** (attempt - 1))
+        print(
+            f"Retrying GitHub API request for {owner}/{repo} after HTTP "
+            f"{response.status_code} "
+            f"(attempt {attempt + 1}/{max_attempts}, delay {retry_delay:g}s)",
+            file=sys.stderr,
+        )
+        time.sleep(retry_delay)
+
+    raise AssertionError("GitHub API retry loop exited unexpectedly")
+
+
 def process_single_item(
     chain,
     repair_chain,
@@ -150,20 +253,8 @@ def process_single_item(
             full_url = f"https://github.com/{owner}/{repo}"
             code_info["code_url"] = full_url
             
-            # 尝试调用 GitHub API 获取信息
             github_token = os.environ.get("TOKEN_GITHUB")
-            headers = {"Accept": "application/vnd.github.v3+json"}
-            if github_token:
-                headers["Authorization"] = f"token {github_token}"
-            
-            api_url = f"https://api.github.com/repos/{owner}/{repo}"
-            resp = requests.get(api_url, headers=headers, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                code_info["code_stars"] = data.get("stargazers_count", 0)
-                code_info["code_last_update"] = data.get("pushed_at", "")[:10]
-            elif resp.status_code not in {403, 404}:
-                resp.raise_for_status()
+            code_info.update(fetch_github_repo_metadata(owner, repo, github_token))
             return code_info
 
         # 2. 如果没有 github.com，尝试匹配 github.io
