@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import call, patch
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ai"))
 import enhance
 
@@ -33,6 +35,37 @@ class FakeGitHubResponse:
 
 
 class EnhanceTests(unittest.TestCase):
+    def test_ai_generation_retries_null_completion(self):
+        requests = []
+        valid_content = FakeChain().invoke({}).content
+
+        def respond(request):
+            requests.append(json.loads(request.content))
+            if len(requests) == 1:
+                return httpx.Response(
+                    200, content=b"null", headers={"Content-Type": "application/json"}
+                )
+            return httpx.Response(200, json={
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": valid_content},
+                }]
+            })
+
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            model = enhance.ChatOpenAI(model="test-model", api_key="test", http_client=client)
+            with patch.dict("os.environ", {"OPENAI_API_KEY": "test"}):
+                with patch.object(enhance, "ChatOpenAI", return_value=model):
+                    result = enhance.process_all_items(
+                        [{"id": "paper-id", "summary": "plain abstract"}],
+                        "test-model", "Chinese", 1, 2,
+                    )
+
+        self.assertEqual(result[0]["AI"], json.loads(valid_content))
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0], requests[1])
+
     def test_process_single_item_generates_ai_without_sensitive_check(self):
         item = {"id": "paper-id", "summary": "plain abstract"}
 

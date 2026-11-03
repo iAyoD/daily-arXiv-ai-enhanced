@@ -32,6 +32,7 @@ template = (BASE_DIR / "template.txt").read_text()
 system = (BASE_DIR / "system.txt").read_text()
 
 REQUIRED_AI_FIELDS = ("tldr", "motivation", "method", "result", "conclusion")
+AI_REQUEST_TIMEOUT_SECONDS = 60
 JSON_SCHEMA_INSTRUCTION = (
     "Return only one valid JSON object with exactly these string fields: "
     '"tldr", "motivation", "method", "result", and "conclusion". '
@@ -89,35 +90,42 @@ def parse_ai_response(content: str, item_id: str) -> Structure:
 
 def generate_ai_fields(chain, repair_chain, item: Dict, language: str, max_ai_attempts: int) -> Dict:
     item_id = item.get("id", "unknown")
+    payload = {"language": language, "content": item["summary"]}
     last_error = None
     last_response = None
 
     for attempt in range(1, max_ai_attempts + 1):
-        if attempt == 1:
-            raw_response = chain.invoke({
-                "language": language,
-                "content": item["summary"],
-            })
-        else:
+        if attempt > 1:
             print(
-                f"Retrying AI JSON generation for {item_id} "
+                f"Retrying AI generation for {item_id} "
                 f"(attempt {attempt}/{max_ai_attempts}): {last_error}",
                 file=sys.stderr,
             )
-            raw_response = repair_chain.invoke({
-                "language": language,
-                "content": item["summary"],
-                "previous_response": last_response or "",
-                "validation_error": str(last_error),
-            })
 
-        last_response = raw_response.content
         try:
-            return parse_ai_response(last_response, item_id).model_dump()
+            if last_response is None:
+                raw_response = chain.invoke(payload)
+            else:
+                raw_response = repair_chain.invoke({
+                    **payload,
+                    "previous_response": last_response,
+                    "validation_error": str(last_error),
+                })
+        except AttributeError as e:
+            # The OpenAI SDK's JSON-mode parser accesses choices on a null completion.
+            if e.name != "choices" or e.obj is not None:
+                raise
+            last_error = e
+            last_response = None
+            continue
+
+        try:
+            return parse_ai_response(raw_response.content, item_id).model_dump()
         except ValueError as e:
             last_error = e
+            last_response = raw_response.content or ""
 
-    raise RuntimeError(f"AI generation failed schema validation for {item_id}") from last_error
+    raise RuntimeError(f"AI generation failed for {item_id} after {max_ai_attempts} attempts") from last_error
 
 
 def fetch_github_repo_metadata(
@@ -297,6 +305,7 @@ def process_all_items(
         api_key=require_env("OPENAI_API_KEY"),
         base_url=os.environ.get("OPENAI_BASE_URL") or None,
         temperature=0,
+        timeout=AI_REQUEST_TIMEOUT_SECONDS,
     ).bind(response_format={"type": "json_object"})
     print('Connect to:', model_name, file=sys.stderr)
     
@@ -348,6 +357,7 @@ def process_all_items(
                 result = future.result()
                 processed_data[idx] = result
             except Exception as e:
+                executor.shutdown(cancel_futures=True)
                 item_id = data[idx].get("id", "unknown")
                 raise RuntimeError(f"AI enhancement failed for item {item_id} at index {idx}") from e
     
