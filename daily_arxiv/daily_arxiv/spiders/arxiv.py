@@ -18,14 +18,15 @@ class ArxivSpider(scrapy.Spider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.target_categories = parse_categories(os.environ.get("CATEGORIES"))
+        self.crawl_date = os.environ.get("CRAWL_DATE") or None
         self.list_show = read_positive_int_env("ARXIV_LIST_SHOW", DEFAULT_LIST_SHOW)
         self.seen_ids = set()
         self.start_urls = [
-            listing_url(category, self.list_show) for category in self.target_categories
+            listing_url(category, self.list_show, self.crawl_date) for category in self.target_categories
         ]  # 起始URL（计算机科学领域的最新论文）
 
     def parse(self, response):
-        listed_papers = extract_listed_papers(response, self.target_categories)
+        listed_papers = extract_listed_papers(response, self.target_categories, self.crawl_date)
         new_ids = []
         for paper in listed_papers:
             if paper.id in self.seen_ids:

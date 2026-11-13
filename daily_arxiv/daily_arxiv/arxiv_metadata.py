@@ -1,6 +1,7 @@
 import os
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 from urllib.parse import urlparse
 
@@ -37,19 +38,42 @@ def normalize_arxiv_id(arxiv_id: str) -> str:
     return re.sub(r"v\d+$", "", arxiv_id.strip())
 
 
-def listing_url(category: str, show: int) -> str:
-    return f"https://arxiv.org/list/{category}/new?skip=0&show={show}"
+def listing_url(category: str, show: int, crawl_date: Optional[str] = None) -> str:
+    listing = "recent" if crawl_date else "new"
+    return f"https://arxiv.org/list/{category}/{listing}?skip=0&show={show}"
 
 
-def extract_listed_papers(selector, target_categories: Sequence[str]) -> List[ListedPaper]:
+def extract_listed_papers(
+    selector, target_categories: Sequence[str], crawl_date: Optional[str] = None
+) -> List[ListedPaper]:
     target_category_set = set(target_categories)
     if not target_category_set:
         raise ValueError("target_categories must not be empty")
 
     replacement_start = _replacement_start_index(selector)
     listed_papers = []
+    paper_nodes = selector.css("dl dt")
 
-    for paper in selector.css("dl dt"):
+    if crawl_date:
+        target_date = date.fromisoformat(crawl_date)
+        dated_lists = {}
+        for paper_list in selector.css("div[id=dlpage] dl"):
+            heading = paper_list.css("h3::text").get()
+            if heading:
+                listing_date = datetime.strptime(heading.split(" (", 1)[0], "%a, %d %b %Y").date()
+                dated_lists[listing_date] = paper_list
+        if not dated_lists or not min(dated_lists) <= target_date <= max(dated_lists):
+            raise ValueError(f"Date {crawl_date} is outside the available arXiv recent listings")
+        if target_date not in dated_lists:
+            return []
+        selected_list = dated_lists[target_date]
+        heading = selected_list.css("h3::text").get()
+        counts = re.search(r"showing (\d+) of (\d+) entries", heading)
+        paper_nodes = selected_list.css("dt")
+        if not counts or len(paper_nodes) != int(counts[2]):
+            raise ValueError(f"Incomplete arXiv listing for {crawl_date}")
+
+    for paper in paper_nodes:
         paper_anchor = paper.css("a[name^='item']::attr(name)").get()
         if not paper_anchor:
             continue

@@ -2,18 +2,26 @@
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
 name: arXiv-daily-ai-enhanced
+run-name: arXiv papers ${{ inputs.crawl_date || 'today' }}
 
 on:
   schedule:
     # Daily at 02:37 UTC (10:37 Asia/Shanghai).
     - cron: "37 2 * * *"
   workflow_dispatch:
+    inputs:
+      crawl_date:
+        description: "Publication date to backfill (YYYY-MM-DD, within arXiv recent listings). Leave empty for today."
+        required: false
+        type: string
 
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
+    env:
+      CRAWL_DATE: ${{ inputs.crawl_date }}
 
     steps:
     - uses: actions/checkout@v4
@@ -45,7 +53,11 @@ jobs:
       id: crawl_step
       run: |
         source .venv/bin/activate
-        today=$(date -u "+%Y-%m-%d")
+        today="${CRAWL_DATE:-$(date -u "+%Y-%m-%d")}"
+        if [[ ! "$today" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [[ "$(date -u -d "$today" "+%Y-%m-%d")" != "$today" ]]; then
+          echo "Invalid crawl date: $today"
+          exit 1
+        fi
         echo "开始爬取 $today 的arXiv论文... / Starting to crawl $today arXiv papers..."
         
         # 检查今日文件是否已存在，如存在则删除 / Check if today's file exists, delete if found

@@ -44,15 +44,15 @@ def load_crawled_papers(data_file: Path):
     return papers
 
 
-def expected_ids_from_arxiv(categories, show):
+def expected_ids_from_arxiv(categories, show, crawl_date=None):
     expected_ids = []
     seen_ids = set()
     for category in categories:
-        url = listing_url(category, show)
+        url = listing_url(category, show, crawl_date)
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         selector = Selector(text=resp.text)
-        for paper in extract_listed_papers(selector, categories):
+        for paper in extract_listed_papers(selector, categories, crawl_date):
             if paper.id not in seen_ids:
                 seen_ids.add(paper.id)
                 expected_ids.append(paper.id)
@@ -78,7 +78,7 @@ def validate_crawl(data_file: Path):
     if duplicate_ids:
         raise RuntimeError("Crawl output contains duplicate paper IDs: " + ", ".join(sorted(duplicate_ids)))
 
-    expected_ids = expected_ids_from_arxiv(categories, show)
+    expected_ids = expected_ids_from_arxiv(categories, show, os.environ.get("CRAWL_DATE") or None)
     expected_id_set = set(expected_ids)
     crawled_id_set = set(ids)
 

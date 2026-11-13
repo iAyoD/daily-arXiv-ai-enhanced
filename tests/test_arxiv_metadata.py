@@ -73,8 +73,48 @@ ABS_HTML = """
 </html>
 """
 
+RECENT_LISTING_HTML = """
+<div id="dlpage">
+  <dl>
+    <h3>Fri, 13 Nov 2026 (showing 1 of 1 entries )</h3>
+    <dt><a name="item1"></a><a title="Abstract" href="/abs/2611.17330">abs</a></dt>
+    <dd><div class="list-subjects">Robotics (cs.RO)</div></dd>
+  </dl>
+  <dl>
+    <h3>Wed, 11 Nov 2026 (showing 1 of 1 entries )</h3>
+    <dt><a name="item2"></a><a title="Abstract" href="/abs/2611.12500">abs</a></dt>
+    <dd><div class="list-subjects">Robotics (cs.RO)</div></dd>
+  </dl>
+</div>
+"""
+
 
 class ArxivMetadataTests(unittest.TestCase):
+    def test_backfill_selects_only_the_requested_publication_date(self):
+        papers = extract_listed_papers(
+            Selector(text=RECENT_LISTING_HTML), ["cs.RO"], "2026-11-13"
+        )
+        self.assertEqual([paper.id for paper in papers], ["2611.17330"])
+
+    def test_backfill_returns_no_papers_on_a_day_without_announcements(self):
+        self.assertEqual(
+            extract_listed_papers(
+                Selector(text=RECENT_LISTING_HTML), ["cs.RO"], "2026-11-12"
+            ),
+            [],
+        )
+
+    def test_backfill_rejects_dates_outside_the_available_list(self):
+        with self.assertRaisesRegex(ValueError, "outside"):
+            extract_listed_papers(
+                Selector(text=RECENT_LISTING_HTML), ["cs.RO"], "2026-11-10"
+            )
+
+    def test_backfill_rejects_a_truncated_listing(self):
+        partial_html = RECENT_LISTING_HTML.replace("showing 1 of 1", "showing 1 of 2")
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            extract_listed_papers(Selector(text=partial_html), ["cs.RO"], "2026-11-13")
+
     def test_extract_listed_papers_filters_replacements_and_normalizes_versions(self):
         papers = extract_listed_papers(Selector(text=LISTING_HTML), ["cs.RO", "cs.CV"])
 
